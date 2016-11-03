@@ -50,6 +50,14 @@ Type objective_function<Type>::operator() ()
 }
 
 ```
+Both `dnorm` and `rnorm` are vectorized, so we could replace lines 13 to 19 of the code above with the following code. In the code below, `rnorm` returns random numbers with the same dimension as `Xbeta`, a vector of length 100. To do this in R, we would have needed to specify the length of the vector to be returned.
+
+```{.Cpp}
+  nll = -sum(dnorm(y, Xbeta, resid_sd, true));
+  SIMULATE {
+    y = rnorm(Xbeta, resid_sd);
+  }
+```
 We can compile and fit the model in the standard way. 
 ```{r runFE, message=FALSE}
 compile("FE.cpp")
@@ -84,7 +92,8 @@ ggplot(plotdat, aes(y, color=type))+
 The values simulated from the fitted model are very close to the observations because the structure of our fitted model perfectly matched the process that created the observations. 
 
 ##A model that does not represent the true underlying process
-In this section we show what happens when we fit a model that is not a good representation of the process that generated the data. This second version of the model ignores the treatment effect and instead fits a global mean parameter `mu`. The following C++ code which is stored in `FE0.cpp`.
+In this section we show what happens when we fit a model that is not a good representation of the process that generated the data. This second version of the model ignores the treatment effect and instead fits a global mean parameter `mu`. The following C++ code which is stored in `FE0.cpp`. In this version of the code, the predicted mean is a scalar, so we must use a for-loop (lines 11 to 17) to simulate repeated draws from the same distribution. This is one instance where it could be useful to have an arguement of `rnorm` specifying the number of repeated draws, but these instances are rare.
+
 ```{#numCode .Cpp .numberLines}
 #include <TMB.hpp>                                
 template<class Type>

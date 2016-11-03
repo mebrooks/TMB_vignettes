@@ -1,0 +1,91 @@
+\documentclass[11pt]{article}
+
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{verbatim}
+\setlength{\oddsidemargin}{0in}
+\setlength{\textwidth}{6.5in}
+\newcommand{\code}[1]{{\tt #1}}
+\bibliographystyle{chicago}
+
+
+\begin{document}
+\title{Fir fecundity example using TMB and mle2}
+\author{Mollie Brooks}
+\date{\today}
+\maketitle
+
+
+\section*{Introduction}
+
+This vignette may be useful to R users who are familiar with using \code{mle2} in the bbmle package but are needing a more flexible and robust maximum likelihood estimator. Reasons for making the switch may include trouble with model convergence or needing to add random effects to account for correlation.
+
+The model presented here is found in chapter 6 of \textit{Ecological Models and Data in R} by Bolker 2008 (hereafter EMD book) and the data originally appeared in Silvertown and Dodd 1999, and Dodd and Silvertown 2000. The data  on \textit{Abies balsamea} includes counts of the cones produced, measurements of tree size (diameter at breast height, DBH), and the status (wave /  non-wave) indicating wave-like die-offs experienced by some populaitons.
+The mean fir fecundity is predicted to follow a power-law and the number of cones should be negative binomially distributed around the mean.\\
+\\$\mu= a$ DBH $^b$\\
+cones $\sim $NegativeBinomial($\mu$, $k$) 
+\\
+
+ 
+\section{Packages}
+<<>>=
+library(emdbook) #for data
+library(bbmle) #for mle2
+library(TMB)
+@
+
+\section{Data}
+Data organization is the same as in the EMD book. 
+<<>>=
+data(FirDBHFec)
+dat=na.omit(FirDBHFec[,c("TOTCONES", "DBH", "WAVE_NON")]) 
+dat$TOTCONES=round(dat$TOTCONES)
+@
+\section{Fitting the model with \code{mle2}}
+The EMD book fits the following model:
+<<>>=
+nbfit.ab = mle2(TOTCONES ~ dnbinom(mu = a * DBH^b,size = k), 
+		start = list(a=c(1,0),b=c(1,0),k=1), data = dat, 
+		parameters = list(a ~ WAVE_NON, b ~ WAVE_NON),
+		optimizer="nlminb")
+summary(nbfit.ab)
+@
+
+\section {Fitting the model in TMB}
+The TMB code for model (in a file named \code{fir.cpp}) looks like this:
+ \lstinputlisting[breaklines=true,frame=single, numbers=left, language=c++]{fir.cpp}
+
+\subsection{Compile TMB code}
+<<>>=
+compile("fir.cpp")
+dyn.load("fir.so")
+@
+
+\subsection{Data structures for TMB}
+Then I organize the data into the formats for TMB. It takes a list of the observed data \code{Ldat} and a list of the initial values of the parameters \code{Lpin}. The object names must be the same as in \code{fir.cpp}.
+<<>>=
+Ldat=list(totcones= dat$TOTCONES,
+			dbh=dat$DBH,
+			wave_non=model.matrix(~WAVE_NON, data=dat)
+			)
+Lpin=list(a=c(1,0), b=c(1,0), log_k=1)
+@
+
+\subsection{Fitting the model via TMB}
+First we must compile the code. Then run it.
+<<>>=
+mod= MakeADFun(Ldat, Lpin, DLL="fir", silent=TRUE)
+fit=nlminb(mod$par, mod$fn, mod$gr)
+sdr=sdreport(mod)
+summary(sdr)
+@
+
+\section{Comparing results}
+<<>>=
+TMBAIC=function(opt){2*length(opt[["par"]])+2*opt[["objective"]]}
+all.equal(TMBAIC(fit), AIC(nbfit.ab))
+all.equal(unname(fit$par)[1:4], unname(coef(nbfit.ab))[1:4])
+@
+\section{Conclusion}
+We got the same parameter estimates and AIC as the example in the EMD book. Most importantly, TMB could be expanded further and include random effects to account for spatial or temporal correlations. 
+\end{document}

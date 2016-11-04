@@ -1,0 +1,122 @@
+---
+title: "Simulate from a Fitted TMB Model"
+output: pdf_document
+---
+This is a basic demonstration of how to use the binomial, Poisson, negative binomial, and gamma distributions for fitting and simulating in TMB. For each distribution, we simulate observations in R, fit a model in TMB, simulate data in TMB from the fitted model, and then plot the observations with the simulations from the fitted model for comparison. 
+
+##Simulate data in R
+```{r intro}
+n=1000
+set.seed(1)
+B=rbinom(n, size=10, prob=0.3) 
+P=rpois(n, lambda=10)
+NB=rnbinom(n, mu=10, size=10)#variance = 20
+G=rgamma(n, shape=9, scale=0.5)
+```
+##Fit a model in TMB
+The code below is saved in a file named `dists4.cpp` because it deals with 4 distributions. Lines 5 to 8 read in the observed data. Lines 10 to 27 initialize parameters and transform them to the appropriate scales. Fitting on the log scale (e.g. `log_lambda`) constrains the parameter to be positive. Fitting on the logit scale (e.g. `logit_prob`) constrains the parameter to be between 0 and 1. Lines 29 to 33 calculate the negative log-likelihood of the four sets of observations. 
+
+Because they are enclosed by `SIMULATE{}`, lines 35 to 48 describe what to do when in simulation mode. In TMB, the functions `rbinom`, `rpois`, `rnbinom`, and `rgamma` return objects of the same dimension as their arguments. In this simple case, our arguments are all scalers, but this is not usually the case. Therefore, to simulate the right number of values for each distribution, we use a for loop on lines 37 to 43. Then we return the simulated values on lines 44 to 47. These are returned as a list, as you will see by the end of this section.  
+
+```{#numCode .Cpp .numberLines}
+#include <TMB.hpp>                                
+template<class Type>
+Type objective_function<Type>::operator() ()
+{
+  DATA_VECTOR(B);
+  DATA_VECTOR(P);
+  DATA_VECTOR(NB);
+  DATA_VECTOR(G);
+  
+  PARAMETER(logit_prob); //for binomial
+  Type prob=invlogit(logit_prob);
+  ADREPORT(prob);
+  PARAMETER(log_lambda); // for Poisson
+  Type lambda=exp(log_lambda);
+  ADREPORT(lambda);
+  PARAMETER(log_mu); // for negative binomial
+  Type mu=exp(log_mu);
+  ADREPORT(mu);
+  PARAMETER(log_var); // for negative binomial
+  Type var=exp(log_var);
+  ADREPORT(var);
+  PARAMETER(log_shape); // for gamma
+  Type shape=exp(log_shape);
+  ADREPORT(shape);
+  PARAMETER(log_scale); // for gamma
+  Type scale=exp(log_scale);
+  ADREPORT(scale);
+  
+  Type nll=0;
+  nll -= sum(dbinom(B, Type(10), prob, true));
+  nll -= sum(dpois(P, lambda, true));
+  nll -= sum(dnbinom2(NB, mu, var, true));
+  nll -= sum(dgamma(G, shape, scale, true));
+  
+  SIMULATE
+  {
+    for(int i=0; i<B.size(); i++)
+    {
+      B(i) = rbinom(Type(10), prob);
+      P(i) = rpois(lambda);
+      NB(i) = rnbinom2(mu, var);
+      G(i) = rgamma(shape, scale);
+    }
+    REPORT(B);
+    REPORT(P);
+    REPORT(NB);
+    REPORT(G);
+  }
+  return nll;
+}
+
+
+```
+
+We can compile and fit the model in the standard way. 
+```{r run, message=FALSE}
+library(TMB)
+compile("dists4.cpp")
+dyn.load(dynlib("dists4"))
+obj=MakeADFun(data=list(B=B, P=P, NB=NB, G=G),
+            parameters=list(
+              logit_prob=0,
+              log_lambda=log(5),
+              log_mu=log(5),
+              log_var=log(30),#var must be greater than mu
+              log_shape=log(5),
+              log_scale=log(0.3)
+            ), 
+            DLL="dists4",
+            silent=TRUE)
+opt = nlminb(obj $par, obj $fn, obj $gr)
+sdr=sdreport(obj) 
+summary(sdr, "report")
+```
+These estimated parameters are not too far from the values used to simulate the observations above. Then to get simulated values from our fitted model, we use the `simulate()` function which is now part of `obj`.
+```{r simFE, message=FALSE}
+sim=obj$simulate()
+str(sim)
+```
+You can see that it returns a list with one element for each object that we reported in lines 44 to 47 of the C++ code above. 
+
+##Compare simulated values from the fitted model to the observed data
+Check that the observed and simulated values have similar distributions.
+
+```{r plotFE, echo=FALSE}
+library(ggplot2)
+library(reshape)
+sim2=melt(do.call(cbind, sim))[,-1]
+names(sim2)[1]="variable"
+sim2$type="simulated"
+
+obs=melt(do.call(cbind, list('B'=B, 'P'=P, 'NB'=NB, 'G'=G)))[,-1]
+names(obs)[1]="variable"
+obs$type="observed"
+plotdat=rbind(obs, sim2)
+ggplot(plotdat, aes(value, color=type))+
+  geom_density()+
+  facet_wrap(~variable, scale="free")+
+  theme_bw()
+```
+
